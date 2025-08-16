@@ -1,0 +1,202 @@
+---
+title: "analyze"
+author: "Kaitoh Kanazawa"
+date: Sys.Date()
+output: 
+  # code
+  html_document: 
+  #https://qiita.com/kazutan/items/726e03dfcef1615ae999#
+  #https://bookdown.org/yihui/rmarkdown/html-document.html#tabbed_sections
+    theme: "spacelab"
+   #table of contents https://qiita.com/9en/items/93634351d34bff4771f8    
+    number_sections: true
+    toc: true    
+    toc_depth: 4
+    toc_float: 
+       collapsed: true
+       smooth_scroll: true
+    code_folding: show #c("none", "show", "hide") 
+    code_download: false  # include Rmd source code for download
+    self_contained: true
+    
+    
+  
+  # rmarkdown yml references 
+  # https://bookdown.org/yihui/rmarkdown/html-document.html
+  # possible header
+  # https://kazutan.github.io/fukuokaR11/intro_rmarkdown_d.html 
+  # https://qiita.com/kazutan/items/726e03dfcef1615ae999
+  # https://qiita.com/kazutan/items/12fdbb8c5b0eae07872d
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# RA ブートキャンプ 事前課題Ⅰ
+# 課題1
+
+
+
+# セッティング
+
+```{r message=FALSE, warning=FALSE, attr.source='.numberLines', include=FALSE, results=FALSE}
+# 現在の環境にある変数の消去
+#rm(list = ls("all.names" = TRUE))
+#データの指数表示を避ける
+options(scipen = 100)
+# free memory
+#gc() 
+```
+
+
+
+## パッケージ
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(forcats)
+library(readr)
+```
+
+
+
+## データ読み込み
+
+```{r}
+df_panel <- readRDS(here::here("data/cleaned/students_absence_panel.rds"))
+```
+
+
+
+## プロット
+### 図1：合計不登校者数の推移
+
+```{r}
+# 年ごとの合計不登校者数
+table_total_absent <- df_panel %>%
+  group_by(year) %>%
+  summarise(students = sum(total_students, na.rm = TRUE),
+            total_absent = sum(absent_n, na.rm = TRUE))
+
+# 表
+table_total_absent
+
+# 棒グラフ
+p1 <- ggplot(table_total_absent, aes(x = factor(year), y = total_absent)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Year", y = "Total absent students", title = "Total absentee students over years") +
+  theme_classic()
+p1
+```
+
+
+
+### 図2：不登校割合の推移
+
+```{r}
+# 年ごとの割合
+table_absent_rate <- df_panel %>%
+  group_by(year) %>%
+  summarise(absent_rate = sum(absent_n) / sum(total_students) * 100)
+
+p2 <- ggplot(table_absent_rate, aes(x = factor(year), y = absent_rate)) +
+  geom_line(group = 1, color = "blue") +
+  geom_point(color = "blue") +
+  geom_text(aes(label = round(absent_rate, 1)), vjust = -0.5, size = 3) +
+  scale_y_continuous(limits = c(0,10)) +
+  labs(x = "Year", y = "Absentee rate", title = "Absentee rate over years") +
+  theme_classic()
+p2
+```
+
+
+
+### 図3：合計不登校者数+不登校割合
+
+```{r}
+# 右軸スケーリング
+max_absent <- max(table_total_absent$total_absent)
+max_rate   <- max(table_absent_rate$absent_rate)
+coef <- max_absent / max_rate
+
+p3 <- ggplot() +
+  geom_bar(stat = "identity", data = table_total_absent, aes(x = factor(year), y = total_absent), fill = "skyblue") +
+  geom_line(data = table_absent_rate, aes(x = factor(year), y = absent_rate * coef), color = "red", group = 1) +
+  geom_point(data = table_absent_rate, aes(x = factor(year), y = absent_rate * coef), color = "red") +
+  scale_y_continuous(name = "Total absent students",
+                     sec.axis = sec_axis(~./coef, name = "Absentee rate")) +
+  labs(x = "Year", title = "Total absent students and absentee rate") +
+  theme_classic()
+p3
+
+# 追加プロット(生徒数の年推移)
+ggplot() +
+  geom_bar(stat = "identity", data = table_total_absent, aes(x = factor(year), y = students), fill = "skyblue") +
+  labs(x = "Year", title = "Total students") +
+  scale_y_continuous(limits = c(0,3300000)) +
+  theme_classic()
+```
+
+
+
+### 図4：2022年度 不登校率ヒストグラム
+
+```{r}
+# 2022年度 不登校率
+df_2022 <- df_panel %>%
+  filter(year == 2022) %>%
+  mutate(absent_rate = absent_n / total_students)
+
+# 平均
+mean_rate <- mean(df_2022$absent_rate, na.rm = TRUE)
+
+p4 <- ggplot(df_2022, aes(x = absent_rate)) +
+  geom_histogram(binwidth = 0.005, fill = "lightblue", color = "black") +
+  geom_vline(xintercept = mean_rate, linetype = "dashed", color = "red") +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(x = "Absentee rate", y = "Count", title = "Distribution of absentee rate (2022)") +
+  theme_classic()
+p4
+```
+
+
+
+### 図5：2022年度不登校率
+
+```{r}
+visited_pref <- "沖縄"  # 実際に行ったことがある都道府県で一番楽しかった場所を入力
+
+# 2022年度不登校率
+df_2022_ranked <- df_2022 %>%
+  arrange(desc(absent_rate)) %>%
+  mutate(prefecture = fct_reorder(prefecture, absent_rate),
+         highlight = if_else(prefecture == visited_pref, "highlight", "other"))
+
+p5 <- ggplot(df_2022_ranked, aes(x = prefecture, y = absent_rate, fill = highlight)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("highlight" = "pink", "other" = "grey")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(x = "Prefecture", y = "Absentee rate", title = "Absentee rate by prefecture (2022)") +
+  theme_classic() +
+  theme(text = element_text(family = "HiraKakuProN-W3"),
+        legend.position = "none")
+p5
+```
+
+
+
+## 考察
+
+　分析結果より、中学生の不登校生徒数及び割合が増加傾向にあることがわかった。それも、全生徒数が減少傾向であるのに対し、不登校生徒数が増加していることで、割合が増加している。
+　また、2020~2021年から不登校生徒数が急増しているように見える。このジャンプは、COVID-19の影響であると私は考える。休校措置や学習環境の制約、生活リズムの乱れなどが、彼らの登校状況に影響を与えたと推察した。
+　
+　
+　
+
+

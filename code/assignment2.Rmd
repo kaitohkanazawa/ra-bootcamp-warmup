@@ -1,0 +1,320 @@
+---
+title: "debug_improve_code"
+author: "Kaitoh Kanazawa"
+date: Sys.Date()
+output: 
+  # code
+  html_document: 
+  #https://qiita.com/kazutan/items/726e03dfcef1615ae999#
+  #https://bookdown.org/yihui/rmarkdown/html-document.html#tabbed_sections
+    theme: "spacelab"
+   #table of contents https://qiita.com/9en/items/93634351d34bff4771f8    
+    number_sections: true
+    toc: true    
+    toc_depth: 4
+    toc_float: 
+       collapsed: true
+       smooth_scroll: true
+    code_folding: show #c("none", "show", "hide") 
+    code_download: false  # include Rmd source code for download
+    self_contained: true
+    
+    
+  
+  # rmarkdown yml references 
+  # https://bookdown.org/yihui/rmarkdown/html-document.html
+  # possible header
+  # https://kazutan.github.io/fukuokaR11/intro_rmarkdown_d.html 
+  # https://qiita.com/kazutan/items/726e03dfcef1615ae999
+  # https://qiita.com/kazutan/items/12fdbb8c5b0eae07872d
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 概要
+
+  Rにおけるデータ処理・可視化・モデル構築に関するコードを解読、バグの発見・修正を行う
+  
+# 課題
+
+  ↓事前課題2.pdfより引用
+  このミニ課題では、6つの小さなRコードの問題を扱います。各問題について：
+    1. コードを注意深く読んでください。
+    2. バグや問題点を見つけてください。
+    3. コードを修正して、正しく効率的に動作するようにしてください。
+    4. （任意）修正内容の簡単な説明も記述してください。
+    
+    
+    
+# セッティング
+
+```{r message=FALSE, warning=FALSE, attr.source='.numberLines', include=FALSE, results=FALSE}
+# 現在の環境にある変数の消去
+#rm(list = ls("all.names" = TRUE))
+#データの指数表示を避ける
+options(scipen = 100)
+# free memory
+#gc() 
+```
+    
+
+
+## パッケージ
+
+```{r}
+library(tidyverse)
+library(estimatr)
+library(purrr)
+```
+    
+    
+    
+# 解答
+## Problem 1: NA Handling
+### 設問
+
+  以下のコードは、 col1 にNAが含まれているかどうかを示すダミー変数を作ろうとしています。
+  出力を確認し、意図通りの動作をするように mutate() の部分を修正してください。
+
+```{r}
+df <- tibble(col1 = sample(c(NA, 1), size = 100, replace = TRUE)) |>
+  mutate(is_na = if_else(col1 == NA, TRUE, FALSE))
+```
+
+  問題点：col1 == NAはNAを常時返すため、TRUE・FALSEで返されない
+  
+### 修正
+
+  修正案：該当部分をis.na(col1)に修正
+
+```{r}
+df <- tibble(col1 = sample(c(NA, 1), size = 100, replace = TRUE)) |>
+  mutate(is_na = if_else(is.na(col1), TRUE, FALSE))
+```
+
+
+
+## Problem 2: Column Selection and Package Compatibility
+### 設問
+
+  次のコードは、CSVファイルを読み込み、 「name」を含む列を選択しようとしています。 このコードはすべての環境で動作しない可能性があります。このコードをそのまま動かすためには、どのようにすれば良いでしょうか？
+
+```{r}
+# ディレクトリの構造上一部改変
+df_population <- readr::read_csv(here::here("data","raw","assignment23_data","raw","population_ps2.csv"))
+list_vars <- dplyr::select_vars(vars = names(df_population), contains("name"))
+df_population %>%
+  select(list_vars)
+```
+
+  問題点：select_varsはdplyr 0.8.4で非推奨、現在は使用不可
+  
+### 修正
+
+  修正案：select内にcontainsを渡す
+
+```{r}
+df_population <- readr::read_csv(here::here("data","raw","assignment23_data","raw","population_ps2.csv"))
+df_population %>%
+  select(contains("name"))
+```
+
+
+
+## Problem 3: Log Transformation
+### 設問
+
+  以下のコードは、人口の変化率を計算し、log-log回帰を実行しています。しかし、以下のコードでは意図した結果が得られない可能性があります。どこに問題があるかを確認し、正しく動作するように修正してください。
+
+```{r}
+# ディレクトリの構造上一部改変
+df_population <- readr::read_csv(here::here("data","raw","assignment23_data","raw","population_ps2.csv"))
+
+df_lm <- df_population |>
+  arrange(city_name, year) |>
+  mutate(change_rate = (log(population) - dplyr::lag(log(population), n = 20)),
+         .by = city_id) |>
+  dplyr::filter(year == 2015)
+
+lm(log(change_rate) ~ log(population), data = df_lm)
+```
+
+  問題点：変化率の算出が間違っている
+  
+### 修正
+
+  修正案：「(人口 - 一年前の人口) / 一年前の人口」の式に変換する　
+
+```{r}
+# ディレクトリの構造上一部改変
+df_population <- readr::read_csv(here::here("data","raw","assignment23_data","raw","population_ps2.csv"))
+
+df_lm <- df_population |>
+  arrange(city_name, year) |>
+  mutate(change_rate = (log(population) - dplyr::lag(log(population), n = 20)) / dplyr::lag(log(population), n = 20),
+         .by = city_id) |>
+  dplyr::filter(year == 2015)
+
+lm(log(change_rate) ~ log(population), data = df_lm)
+```
+
+
+
+## Problem 4: Reusable ggplot Code
+### 設問
+
+  異なる変数の組み合わせで複数の散布図を作成したいとします。以下のコードは繰り返しが多くなっています。列名を引数として受け取れるような関数を作成し、コードの重複を減らしてください。
+
+```{r}
+set.seed(111)
+
+df <- tibble(col_1 = seq(1, 10),
+             col_2 = seq(11, 20) + rnorm(n = 10, 0, 1),
+             col_3 = seq(30, 21) + rnorm(n = 10, 0, 1),)
+
+plot_col_12 <- ggplot(df, aes(x = col_1, y = col_2)) +
+  geom_point() +
+  theme_minimal()
+
+
+plot_col_13 <- ggplot(df, aes(x = col_1, y = col_3)) +
+  geom_point() +
+  theme_minimal()
+
+
+plot_col_23 <- ggplot(df, aes(x = col_2, y = col_3)) +
+  geom_point() +
+  theme_minimal()
+```
+
+  問題点：変数の組み合わせ毎にggplotを作成
+  
+### 修正
+
+  修正案：関数を作成
+
+```{r}
+set.seed(111)
+
+df <- tibble(col_1 = seq(1, 10),
+             col_2 = seq(11, 20) + rnorm(n = 10, 0, 1),
+             col_3 = seq(30, 21) + rnorm(n = 10, 0, 1),)
+
+plot_scatter <- function(df, x, y) {
+  ggplot(df, aes(x = !!enquo(x), y = !!enquo(y))) +
+    geom_point() +
+    theme_minimal()
+}
+
+plot_scatter(df, col_1, col_2)
+plot_scatter(df, col_1, col_3)
+plot_scatter(df, col_2, col_3)
+```
+
+
+
+## Problem 5: Dynamic Column Naming in mutate()
+### 設問
+
+  以下の関数は、指定された名前で新しい列を作成しようとしていますが、正しく動作しません。ユーザーが与えた”文字”(文字列とは限らない)を列名として使用できるよう、関数を修正してください。
+
+```{r}
+df <- tibble(a = seq(1, 10))
+
+add_column <- function(df, is_name) {
+  df <- df |>
+    mutate(is_name = if_else(a > 5, TRUE, FALSE))
+  return(df)
+}
+
+add_column(df,"higher") |>
+  dplyr::filter(higher == TRUE)
+```
+
+  問題点：文字列では列名にできない
+  
+### 修正
+
+  修正案：:=とsym()を用いる
+
+```{r}
+df <- tibble(a = seq(1, 10))
+
+add_column <- function(df, is_name) {
+  df <- df |>
+    mutate(!!sym(is_name) := if_else(a > 5, TRUE, FALSE))
+  return(df)
+}
+
+add_column(df, "higher") %>%
+  filter(higher == TRUE)
+```
+
+
+
+## Problem 6: Simplifying Model Code with Formula Generation
+### 設問
+
+  複数の線形モデルを作成したいとします。以下の関数は同じようなコードが繰り返されています。より柔軟で簡潔な書き方に修正してください。（新しい変数を追加したい場合も考えてみましょう。 ）
+
+```{r}
+set.seed(111)
+
+df <- tibble(y = seq(101, 200),
+             x_1 = seq(1, 100) + rnorm(n = 100, 0, 1),
+             x_2 = sample(c(0,1), 100, replace = TRUE),
+             x_3 = seq(50, 149) + rnorm(n = 100, 0, 1))
+
+linear_models <- function() {
+  
+  model_1 <- lm_robust(y ~ x_1)
+  model_2 <- lm_robust(y ~ x_1 + x_2)
+  model_3 <- lm_robust(y ~ x_2)
+  model_4 <- lm_robust(y ~ x_1 + x_2 + x_3)
+  
+  list_output <- list(
+    model_1 = model_1,
+    model_2 = model_2,
+    model_3 = model_3,
+    model_4 = model_4)
+  
+  return(list_output)
+  
+}
+```
+
+  問題点：各変数の組み合わせ毎にlm_robustを実行
+  
+### 修正
+
+  修正案：各変数の組み合わせをリスト化し、ループでモデリング
+
+```{r}
+linear_models <- function(data) {
+  vars_list <- list(
+    c("x_1"),
+    c("x_1", "x_2"),
+    c("x_2"),
+    c("x_1", "x_2", "x_3")
+  )
+
+  models <- imap(vars_list, function(vars, i) {
+    fml <- as.formula(paste("y ~", paste(vars, collapse = " + ")))
+    lm_robust(fml, data = data)
+    }
+  )
+
+  names(models) <- paste0("model_", seq_along(models))
+  return(models)
+}
+
+linear_models(df)
+```
+
+
+

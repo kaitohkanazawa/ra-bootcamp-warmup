@@ -1,0 +1,267 @@
+---
+title: "assignment3"
+author: "Kaitoh Kanazawa"
+date: Sys.Date()
+output: 
+  # code
+  html_document: 
+  #https://qiita.com/kazutan/items/726e03dfcef1615ae999#
+  #https://bookdown.org/yihui/rmarkdown/html-document.html#tabbed_sections
+    theme: "spacelab"
+   #table of contents https://qiita.com/9en/items/93634351d34bff4771f8    
+    number_sections: true
+    toc: true    
+    toc_depth: 4
+    toc_float: 
+       collapsed: true
+       smooth_scroll: true
+    code_folding: show #c("none", "show", "hide") 
+    code_download: false  # include Rmd source code for download
+    self_contained: true
+    
+    
+  
+  # rmarkdown yml references 
+  # https://bookdown.org/yihui/rmarkdown/html-document.html
+  # possible header
+  # https://kazutan.github.io/fukuokaR11/intro_rmarkdown_d.html 
+  # https://qiita.com/kazutan/items/726e03dfcef1615ae999
+  # https://qiita.com/kazutan/items/12fdbb8c5b0eae07872d
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 概要
+
+  住民基本台帳の人口データを整形・加工するRコードのリファクタリング
+  
+# 課題
+
+  ↓事前課題3.pdfより引用
+  1.コード全体を読み、何をしているのか理解してください。
+  2.処理の流れや構造を整理し、どのように分割・改善できるかを考えてください。
+  3.可読性・保守性・再利用性を意識してリファクタリングを実装してください。
+  4.実装後の出力が元の出力と一致することを確認してください。
+  5.リファクタリング前後の処理速度を測定し、パフォーマンスの違いを比較してください。
+  
+
+
+# セッティング
+
+```{r message=FALSE, warning=FALSE, attr.source='.numberLines', include=FALSE, results=FALSE}
+# 現在の環境にある変数の消去
+#rm(list = ls("all.names" = TRUE))
+#データの指数表示を避ける
+options(scipen = 100)
+# free memory
+#gc() 
+```
+    
+
+
+# パッケージ
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(readxl)
+library(purrr)
+library(here)
+library(tictoc)
+```
+
+
+
+# 修正前コード
+
+　データ読み込み・処理→2020年IDリスト読み込み→旧自治体検索関数作成→データ結合・出力となっている。
+　前処理・変換・集計・出力が混在している。
+
+```{r}
+tic()
+
+# Read Data
+df_pop_raw <- read_csv(here("data","raw","assignment23_data","raw", "population_raw.csv")) %>%
+  separate(municipality_name, into = c("prefecture_name_copy", "municipality_name"), sep = "-") %>%
+  select(-prefecture_name_copy) %>%
+  mutate(year = str_remove(year, "year_")) %>%
+  mutate(year = as.numeric(year)) %>%
+  mutate(municipality_id = stringr::str_sub(municipality_id, start = 1, end = -2)) %>%
+  mutate(across(c(municipality_name), ~na_if(., "-"))) %>%
+  mutate(across(c(municipality_name), ~na_if(., "\u001f"))) %>%
+  tidyr::drop_na(municipality_name) %>%
+  mutate(across(-any_of(c("prefecture_name", "municipality_name")), as.numeric))
+
+# Merge Data
+adjust_df <- readxl::read_xlsx(
+  here::here("data","raw","assignment23_data","raw", "municipality_converter_jp.xlsx")
+)
+
+df_municipality_id_2020 <- adjust_df %>%
+  distinct(id_muni2020) %>%
+  rename(municipality_id = id_muni2020)
+
+list_2020_id <- df_municipality_id_2020 %>%
+  pull(municipality_id)
+
+df_name_id <- df_pop_raw %>%
+  select(municipality_id, municipality_name, prefecture_name, year) |>
+  dplyr::filter(year == 2020) %>%
+  dplyr::filter(municipality_id %in% list_2020_id) %>%
+  distinct() %>%
+  select(-year)
+
+adjust_municipality_id <- function(id_n, df_pop_raw, adjust_df) {
+  print(id_n)
+
+  list_id <- adjust_df %>%
+    dplyr::filter(id_muni2020 == id_n) %>%
+    select(seq(2, 10)) %>%
+    tidyr::pivot_longer(
+      cols = everything(),
+      names_to = "year",
+      values_to = "id"
+    ) %>%
+    distinct(id) %>%
+    drop_na() %>%
+    pull()
+
+  df_id_n <- df_pop_raw %>%
+    dplyr::filter(municipality_id %in% list_id) %>%
+    mutate(municipality_id = as.character(municipality_id))
+
+  city_data <- df_pop_raw %>%
+    dplyr::filter(year == 2020, municipality_id == id_n) %>%
+    select(municipality_id, municipality_name, prefecture_name)
+
+  municipality_id_n <- city_data %>% pull(municipality_id)
+  municipality_name_n <- city_data %>% pull(municipality_name)
+  prefecture_name_n <- city_data %>% pull(prefecture_name)
+
+  list_vars <- c(
+    "male", "female", "total", "household",
+    "moving_in", "birth", "increase_total",
+    "moving_out", "mortality", "decrease_total",
+    "change", "natural", "social"
+  )
+
+  output_data <- df_id_n %>%
+    reframe(across(any_of(list_vars), ~sum(., na.rm = TRUE)), .by = year) %>%
+    mutate(municipality_id = municipality_id_n)
+
+  return(output_data)
+  
+}
+
+df_pop <- purrr::map(list_2020_id, adjust_municipality_id, df_pop_raw, adjust_df) %>%
+  bind_rows()
+
+df_population_adjusted <- df_pop %>%
+  left_join(df_name_id, by = "municipality_id") %>%
+  select(municipality_id, municipality_name, prefecture_name, year, everything())
+
+#出力されたデータの確認(追加)
+glimpse(df_population_adjusted)
+
+#write_csv(df_population_adjusted, here("assignment23_data", "raw", "output", "population_adjust.csv"))
+
+toc()
+```
+
+
+
+# 修正後コード
+
+  以下の方向性でリファクタリング
+  ・関数を細分化・定義し、関数内の冗長性を改善
+  ・関数から変数定義を外部化、再利用性を
+
+```{r}
+tic()
+
+#---------------------------------
+# 定数
+#---------------------------------
+agg_vars <- c(
+  "male", "female", "total", "household",
+  "moving_in", "birth", "increase_total",
+  "moving_out", "mortality", "decrease_total",
+  "change", "natural", "social"
+)
+
+#---------------------------------
+# 関数: 人口データ処理
+#---------------------------------
+load_population_data <- function(path) {
+  read_csv(path) %>%
+    separate(municipality_name, into = c("prefecture_name_copy", "municipality_name"), sep = "-") %>%
+    select(-prefecture_name_copy) %>%
+    mutate(year = as.numeric(str_remove(year, "year_")),
+           municipality_id = str_sub(municipality_id, start = 1, end = -2)) %>%
+    mutate(across(municipality_name, ~na_if(., "-"))) %>%
+    mutate(across(municipality_name, ~na_if(., "\u001f"))) %>%
+    drop_na(municipality_name) %>%
+    mutate(across(-any_of(c("prefecture_name", "municipality_name")), as.numeric))
+}
+
+#---------------------------------
+# 関数: 2020年IDリスト
+#---------------------------------
+get_id_list_for_2020 <- function(adjust_df, id_2020) {
+  adjust_df %>%
+    filter(id_muni2020 == id_2020) %>%
+    select(seq(2, 10)) %>%
+    pivot_longer(cols = everything(), names_to = "year", values_to = "id") %>%
+    distinct(id) %>%
+    drop_na() %>%
+    pull(id)
+}
+
+#---------------------------------
+# 関数: 2020年ID集計
+#---------------------------------
+adjust_municipality <- function(id_2020, df_pop_raw, adjust_df) {
+  ids <- get_id_list_for_2020(adjust_df, id_2020)
+
+  df_pop_raw %>%
+    filter(municipality_id %in% ids) %>%
+    reframe(across(all_of(agg_vars), ~ sum(.x, na.rm = TRUE)), .by = year) %>%
+    mutate(municipality_id = id_2020)
+}
+
+#---------------------------------
+# 集計処理
+#---------------------------------
+# データ読み込み
+df_pop_raw <- load_population_data(here("data","raw","assignment23_data","raw", "population_raw.csv"))
+adjust_df <- read_xlsx(here("data","raw","assignment23_data","raw", "municipality_converter_jp.xlsx"))
+
+# 2020年IDリスト
+list_2020_id <- adjust_df %>% distinct(id_muni2020) %>% pull(id_muni2020)
+
+df_name_id <- df_pop_raw %>%
+  filter(year == 2020, municipality_id %in% list_2020_id) %>%
+  distinct(municipality_id, municipality_name, prefecture_name)
+
+# 集計
+df_pop_adjusted <- map_df(list_2020_id, adjust_municipality, df_pop_raw, adjust_df) %>%
+  left_join(df_name_id, by = "municipality_id") %>%
+  select(municipality_id, municipality_name, prefecture_name, year, everything())
+
+# データ概要
+glimpse(df_pop_adjusted)
+
+# 出力
+# write_csv(df_pop_adjusted, here("assignment23_data", "raw", "output", "population_adjusted.csv"))
+
+toc()
+```
+
+
